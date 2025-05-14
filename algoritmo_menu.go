@@ -26,21 +26,6 @@ func predict(X []float64, weights []float64) float64 {
 	return sigmoid(z)
 }
 
-func accuracy(X [][]float64, y []float64, weights []float64) float64 {
-	correct := 0
-	for i := 0; i < len(X); i++ {
-		pred := predict(X[i], weights)
-		label := 0.0
-		if pred >= 0.5 {
-			label = 1.0
-		}
-		if label == y[i] {
-			correct++
-		}
-	}
-	return float64(correct) / float64(len(X))
-}
-
 func loadCSVData(path string) ([][]float64, []float64, float64, float64, float64, float64, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -123,45 +108,69 @@ func trainSequential(X [][]float64, y []float64, learningRate float64, iteration
 	return weights
 }
 
-// ----------- Entrenamiento concurrente -----------
+// ----------- Entrenamiento concurrente optimizado con minibatches -----------
 
-func trainConcurrent(X [][]float64, y []float64, learningRate float64, iterations int) []float64 {
+func trainConcurrent(X [][]float64, y []float64, learningRate float64, iterations int, batchSize int) []float64 {
 	features := len(X[0])
 	weights := make([]float64, features)
 
 	for iter := 0; iter < iterations; iter++ {
 		gradients := make([]float64, features)
-		partialChan := make(chan []float64, len(X))
 		var wg sync.WaitGroup
+		batches := len(X) / batchSize
+		if len(X)%batchSize != 0 {
+			batches++
+		}
 
-		for i := 0; i < len(X); i++ {
+		// Procesamos minibatches
+		for b := 0; b < batches; b++ {
 			wg.Add(1)
-			go func(i int) {
+			go func(batchIndex int) {
 				defer wg.Done()
-				pred := predict(X[i], weights)
-				error := pred - y[i]
-				localGrad := make([]float64, features)
-				for j := 0; j < features; j++ {
-					localGrad[j] = error * X[i][j]
+				start := batchIndex * batchSize
+				end := start + batchSize
+				if end > len(X) {
+					end = len(X)
 				}
-				partialChan <- localGrad
-			}(i)
+				
+				partialGradients := make([]float64, features)
+				for i := start; i < end; i++ {
+					pred := predict(X[i], weights)
+					error := pred - y[i]
+					for j := 0; j < features; j++ {
+						partialGradients[j] += error * X[i][j]
+					}
+				}
+				
+				// Acumulamos gradientes globales
+				for j := 0; j < features; j++ {
+					gradients[j] += partialGradients[j]
+				}
+			}(b)
 		}
 
+		// Esperamos que todas las goroutines terminen
 		wg.Wait()
-		close(partialChan)
 
-		for grad := range partialChan {
-			for j := 0; j < features; j++ {
-				gradients[j] += grad[j]
-			}
-		}
-
+		// Actualizamos los pesos después de cada iteración
 		for j := 0; j < features; j++ {
 			weights[j] -= learningRate * gradients[j] / float64(len(X))
 		}
 	}
 	return weights
+}
+
+// Función para calcular la precisión
+
+func calculateAccuracy(X [][]float64, y []float64, weights []float64) float64 {
+	correct := 0
+	for i := 0; i < len(X); i++ {
+		pred := predict(X[i], weights)
+		if (pred >= 0.5 && y[i] == 1.0) || (pred < 0.5 && y[i] == 0.0) {
+			correct++
+		}
+	}
+	return float64(correct) / float64(len(X)) * 100
 }
 
 // ----------- Menú principal -----------
@@ -176,7 +185,9 @@ func main() {
 
 	learningRate := 0.1
 	iterations := 1000
+	batchSize := 100 // Tamaño del minibatch
 
+	// Normalizar muestra manualmente
 	rawMuestra := []float64{1, 4.2, 120}
 	rawMuestra[1] = (rawMuestra[1] - minRating) / (maxRating - minRating)
 	rawMuestra[2] = (rawMuestra[2] - minReviews) / (maxReviews - minReviews)
@@ -199,36 +210,36 @@ func main() {
 			start := time.Now()
 			weights := trainSequential(X, y, learningRate, iterations)
 			duration := time.Since(start)
+			accuracy := calculateAccuracy(X, y, weights)
 			fmt.Println("\n--- Modo Secuencial ---")
 			fmt.Println("Pesos:", weights)
 			fmt.Printf("Probabilidad ejemplo: %.4f\n", predict(rawMuestra, weights))
-			fmt.Printf("Precisión: %.2f%%\n", accuracy(X, y, weights)*100)
+			fmt.Printf("Precisión: %.2f%%\n", accuracy)
 			fmt.Println("Tiempo:", duration)
 		case "2":
 			start := time.Now()
-			weights := trainConcurrent(X, y, learningRate, iterations)
+			weights := trainConcurrent(X, y, learningRate, iterations, batchSize)
 			duration := time.Since(start)
+			accuracy := calculateAccuracy(X, y, weights)
 			fmt.Println("\n--- Modo Concurrente ---")
 			fmt.Println("Pesos:", weights)
 			fmt.Printf("Probabilidad ejemplo: %.4f\n", predict(rawMuestra, weights))
-			fmt.Printf("Precisión: %.2f%%\n", accuracy(X, y, weights)*100)
+			fmt.Printf("Precisión: %.2f%%\n", accuracy)
 			fmt.Println("Tiempo:", duration)
 		case "3":
 			startSeq := time.Now()
 			weightsSeq := trainSequential(X, y, learningRate, iterations)
 			durSeq := time.Since(startSeq)
-			accSeq := accuracy(X, y, weightsSeq)
+			accuracySeq := calculateAccuracy(X, y, weightsSeq)
 
 			startConc := time.Now()
-			weightsConc := trainConcurrent(X, y, learningRate, iterations)
+			weightsConc := trainConcurrent(X, y, learningRate, iterations, batchSize)
 			durConc := time.Since(startConc)
-			accConc := accuracy(X, y, weightsConc)
+			accuracyConc := calculateAccuracy(X, y, weightsConc)
 
 			fmt.Println("\n--- Comparación ---")
-			fmt.Printf("Secuencial: Tiempo: %v | Precisión: %.2f%% | Probabilidad: %.4f\n",
-				durSeq, accSeq*100, predict(rawMuestra, weightsSeq))
-			fmt.Printf("Concurrente: Tiempo: %v | Precisión: %.2f%% | Probabilidad: %.4f\n",
-				durConc, accConc*100, predict(rawMuestra, weightsConc))
+			fmt.Printf("Secuencial: Tiempo: %v | Precisión: %.2f%% | Probabilidad: %.4f\n", durSeq, accuracySeq, predict(rawMuestra, weightsSeq))
+			fmt.Printf("Concurrente: Tiempo: %v | Precisión: %.2f%% | Probabilidad: %.4f\n", durConc, accuracyConc, predict(rawMuestra, weightsConc))
 		case "4":
 			fmt.Println("Saliendo...")
 			return
