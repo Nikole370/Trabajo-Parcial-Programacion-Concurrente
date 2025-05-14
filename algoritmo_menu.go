@@ -26,21 +26,38 @@ func predict(X []float64, weights []float64) float64 {
 	return sigmoid(z)
 }
 
-func loadCSVData(path string) ([][]float64, []float64, error) {
+func accuracy(X [][]float64, y []float64, weights []float64) float64 {
+	correct := 0
+	for i := 0; i < len(X); i++ {
+		pred := predict(X[i], weights)
+		label := 0.0
+		if pred >= 0.5 {
+			label = 1.0
+		}
+		if label == y[i] {
+			correct++
+		}
+	}
+	return float64(correct) / float64(len(X))
+}
+
+func loadCSVData(path string) ([][]float64, []float64, float64, float64, float64, float64, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, 0, 0, 0, err
 	}
 	defer file.Close()
 
 	reader := csv.NewReader(file)
 	records, err := reader.ReadAll()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, 0, 0, 0, err
 	}
 
 	var X [][]float64
 	var y []float64
+	minRating, maxRating := math.MaxFloat64, -math.MaxFloat64
+	minReviews, maxReviews := math.MaxFloat64, -math.MaxFloat64
 
 	for i, row := range records {
 		if i == 0 {
@@ -52,6 +69,19 @@ func loadCSVData(path string) ([][]float64, []float64, error) {
 			continue
 		}
 
+		if rating < minRating {
+			minRating = rating
+		}
+		if rating > maxRating {
+			maxRating = rating
+		}
+		if numReviews < minReviews {
+			minReviews = numReviews
+		}
+		if numReviews > maxReviews {
+			maxReviews = numReviews
+		}
+
 		xi := []float64{1, rating, numReviews}
 		X = append(X, xi)
 
@@ -61,7 +91,14 @@ func loadCSVData(path string) ([][]float64, []float64, error) {
 		}
 		y = append(y, label)
 	}
-	return X, y, nil
+	return X, y, minRating, maxRating, minReviews, maxReviews, nil
+}
+
+func normalizeFeatures(X [][]float64, minRating, maxRating, minReviews, maxReviews float64) {
+	for i := 0; i < len(X); i++ {
+		X[i][1] = (X[i][1] - minRating) / (maxRating - minRating)
+		X[i][2] = (X[i][2] - minReviews) / (maxReviews - minReviews)
+	}
 }
 
 // ----------- Entrenamiento secuencial -----------
@@ -94,7 +131,7 @@ func trainConcurrent(X [][]float64, y []float64, learningRate float64, iteration
 
 	for iter := 0; iter < iterations; iter++ {
 		gradients := make([]float64, features)
-		var mutex sync.Mutex
+		partialChan := make(chan []float64, len(X))
 		var wg sync.WaitGroup
 
 		for i := 0; i < len(X); i++ {
@@ -103,19 +140,22 @@ func trainConcurrent(X [][]float64, y []float64, learningRate float64, iteration
 				defer wg.Done()
 				pred := predict(X[i], weights)
 				error := pred - y[i]
-				localGradient := make([]float64, features)
+				localGrad := make([]float64, features)
 				for j := 0; j < features; j++ {
-					localGradient[j] = error * X[i][j]
+					localGrad[j] = error * X[i][j]
 				}
-				mutex.Lock()
-				for j := 0; j < features; j++ {
-					gradients[j] += localGradient[j]
-				}
-				mutex.Unlock()
+				partialChan <- localGrad
 			}(i)
 		}
 
 		wg.Wait()
+		close(partialChan)
+
+		for grad := range partialChan {
+			for j := 0; j < features; j++ {
+				gradients[j] += grad[j]
+			}
+		}
 
 		for j := 0; j < features; j++ {
 			weights[j] -= learningRate * gradients[j] / float64(len(X))
@@ -127,22 +167,26 @@ func trainConcurrent(X [][]float64, y []float64, learningRate float64, iteration
 // ----------- Menú principal -----------
 
 func main() {
-	X, y, err := loadCSVData("yelp_database.csv")
+	X, y, minRating, maxRating, minReviews, maxReviews, err := loadCSVData("yelp_database.csv")
 	if err != nil {
-		fmt.Println("Error al cargar el archivo:", err)
+		fmt.Println("Error al cargar datos:", err)
 		return
 	}
+	normalizeFeatures(X, minRating, maxRating, minReviews, maxReviews)
 
 	learningRate := 0.1
 	iterations := 1000
-	muestra := []float64{1, 4.2, 120}
+
+	rawMuestra := []float64{1, 4.2, 120}
+	rawMuestra[1] = (rawMuestra[1] - minRating) / (maxRating - minRating)
+	rawMuestra[2] = (rawMuestra[2] - minReviews) / (maxReviews - minReviews)
 
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
 		fmt.Println("\n======= MENÚ =======")
-		fmt.Println("1. Entrenar regresión logística (Secuencial)")
-		fmt.Println("2. Entrenar regresión logística (Concurrente)")
+		fmt.Println("1. Entrenar (Secuencial)")
+		fmt.Println("2. Entrenar (Concurrente)")
 		fmt.Println("3. Comparar ambos")
 		fmt.Println("4. Salir")
 		fmt.Print("Seleccione una opción: ")
@@ -157,37 +201,37 @@ func main() {
 			duration := time.Since(start)
 			fmt.Println("\n--- Modo Secuencial ---")
 			fmt.Println("Pesos:", weights)
-			fmt.Printf("Probabilidad ejemplo: %.4f\n", predict(muestra, weights))
+			fmt.Printf("Probabilidad ejemplo: %.4f\n", predict(rawMuestra, weights))
+			fmt.Printf("Precisión: %.2f%%\n", accuracy(X, y, weights)*100)
 			fmt.Println("Tiempo:", duration)
-
 		case "2":
 			start := time.Now()
 			weights := trainConcurrent(X, y, learningRate, iterations)
 			duration := time.Since(start)
 			fmt.Println("\n--- Modo Concurrente ---")
 			fmt.Println("Pesos:", weights)
-			fmt.Printf("Probabilidad ejemplo: %.4f\n", predict(muestra, weights))
+			fmt.Printf("Probabilidad ejemplo: %.4f\n", predict(rawMuestra, weights))
+			fmt.Printf("Precisión: %.2f%%\n", accuracy(X, y, weights)*100)
 			fmt.Println("Tiempo:", duration)
-
 		case "3":
 			startSeq := time.Now()
 			weightsSeq := trainSequential(X, y, learningRate, iterations)
 			durSeq := time.Since(startSeq)
+			accSeq := accuracy(X, y, weightsSeq)
 
 			startConc := time.Now()
 			weightsConc := trainConcurrent(X, y, learningRate, iterations)
 			durConc := time.Since(startConc)
+			accConc := accuracy(X, y, weightsConc)
 
 			fmt.Println("\n--- Comparación ---")
-			fmt.Println("Secuencial:")
-			fmt.Printf("Tiempo: %v | Probabilidad: %.4f\n", durSeq, predict(muestra, weightsSeq))
-			fmt.Println("Concurrente:")
-			fmt.Printf("Tiempo: %v | Probabilidad: %.4f\n", durConc, predict(muestra, weightsConc))
-
+			fmt.Printf("Secuencial: Tiempo: %v | Precisión: %.2f%% | Probabilidad: %.4f\n",
+				durSeq, accSeq*100, predict(rawMuestra, weightsSeq))
+			fmt.Printf("Concurrente: Tiempo: %v | Precisión: %.2f%% | Probabilidad: %.4f\n",
+				durConc, accConc*100, predict(rawMuestra, weightsConc))
 		case "4":
 			fmt.Println("Saliendo...")
 			return
-
 		default:
 			fmt.Println("Opción inválida.")
 		}
