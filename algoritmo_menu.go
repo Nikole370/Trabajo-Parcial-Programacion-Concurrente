@@ -117,6 +117,8 @@ func trainConcurrent(X [][]float64, y []float64, learningRate float64, iteration
 	for iter := 0; iter < iterations; iter++ {
 		gradients := make([]float64, features)
 		var wg sync.WaitGroup
+		var mutex sync.Mutex // Mutex para sincronizar el acceso a 'gradients'
+
 		batches := len(X) / batchSize
 		if len(X)%batchSize != 0 {
 			batches++
@@ -132,7 +134,7 @@ func trainConcurrent(X [][]float64, y []float64, learningRate float64, iteration
 				if end > len(X) {
 					end = len(X)
 				}
-				
+
 				partialGradients := make([]float64, features)
 				for i := start; i < end; i++ {
 					pred := predict(X[i], weights)
@@ -141,11 +143,13 @@ func trainConcurrent(X [][]float64, y []float64, learningRate float64, iteration
 						partialGradients[j] += error * X[i][j]
 					}
 				}
-				
-				// Acumulamos gradientes globales
+
+				// Acumulamos gradientes globales de forma segura con mutex
+				mutex.Lock()
 				for j := 0; j < features; j++ {
 					gradients[j] += partialGradients[j]
 				}
+				mutex.Unlock()
 			}(b)
 		}
 
@@ -159,6 +163,7 @@ func trainConcurrent(X [][]float64, y []float64, learningRate float64, iteration
 	}
 	return weights
 }
+
 
 // Función para calcular la precisión
 
