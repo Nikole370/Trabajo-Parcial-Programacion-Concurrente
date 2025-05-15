@@ -89,53 +89,42 @@ func normalizeFeatures(X [][]float64, minRating, maxRating, minReviews, maxRevie
 func trainConcurrent(X [][]float64, y []float64, learningRate float64, iterations int, batchSize int) []float64 {
 	features := len(X[0])
 	weights := make([]float64, features)
+	dataLen := len(X)
 
 	for iter := 0; iter < iterations; iter++ {
-		gradients := make([]float64, features)
 		var wg sync.WaitGroup
-		var mutex sync.Mutex // Mutex para sincronizar el acceso a 'gradients'
+		var mutex sync.Mutex
 
-		batches := len(X) / batchSize
-		if len(X)%batchSize != 0 {
-			batches++
-		}
-
-		// Procesamos minibatches
-		for b := 0; b < batches; b++ {
+		for i := 0; i < dataLen; i += batchSize {
 			wg.Add(1)
-			go func(batchIndex int) {
-				defer wg.Done()
-				start := batchIndex * batchSize
-				end := start + batchSize
-				if end > len(X) {
-					end = len(X)
-				}
 
+			start := i
+			end := i + batchSize
+			if end > dataLen {
+				end = dataLen
+			}
+
+			go func(start, end int) {
+				defer wg.Done()
 				partialGradients := make([]float64, features)
-				for i := start; i < end; i++ {
-					pred := predict(X[i], weights)
-					error := pred - y[i]
-					for j := 0; j < features; j++ {
-						partialGradients[j] += error * X[i][j]
+
+				for j := start; j < end; j++ {
+					pred := predict(X[j], weights)
+					error := pred - y[j]
+					for k := 0; k < features; k++ {
+						partialGradients[k] += error * X[j][k]
 					}
 				}
 
-				// Acumulamos gradientes globales de forma segura con mutex
 				mutex.Lock()
-				for j := 0; j < features; j++ {
-					gradients[j] += partialGradients[j]
+				for k := 0; k < features; k++ {
+					weights[k] -= learningRate * partialGradients[k] / float64(end-start)
 				}
 				mutex.Unlock()
-			}(b)
+			}(start, end)
 		}
 
-		// Esperamos que todas las goroutines terminen
 		wg.Wait()
-
-		// Actualizamos los pesos después de cada iteración
-		for j := 0; j < features; j++ {
-			weights[j] -= learningRate * gradients[j] / float64(len(X))
-		}
 	}
 	return weights
 }
