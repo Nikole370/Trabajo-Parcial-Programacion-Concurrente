@@ -85,21 +85,30 @@ func normalizeFeatures(X [][]float64, minRating, maxRating, minReviews, maxRevie
 
 // ----------- Entrenamiento Secuencial -----------
 
-func trainSequential(X [][]float64, y []float64, learningRate float64, iterations int) []float64 {
+func trainSequential(X [][]float64, y []float64, learningRate float64, iterations int, batchSize int) []float64 {
 	features := len(X[0])
 	weights := make([]float64, features)
+	dataLen := len(X)
 
 	for iter := 0; iter < iterations; iter++ {
-		gradients := make([]float64, features)
-		for i := 0; i < len(X); i++ {
-			pred := predict(X[i], weights)
-			error := pred - y[i]
-			for j := 0; j < features; j++ {
-				gradients[j] += error * X[i][j]
+		for i := 0; i < dataLen; i += batchSize {
+			end := i + batchSize
+			if end > dataLen {
+				end = dataLen
 			}
-		}
-		for j := 0; j < features; j++ {
-			weights[j] -= learningRate * gradients[j] / float64(len(X))
+
+			gradients := make([]float64, features)
+			for j := i; j < end; j++ {
+				pred := predict(X[j], weights)
+				error := pred - y[j]
+				for k := 0; k < features; k++ {
+					gradients[k] += error * X[j][k]
+				}
+			}
+
+			for k := 0; k < features; k++ {
+				weights[k] -= learningRate * gradients[k] / float64(end-i)
+			}
 		}
 	}
 	return weights
