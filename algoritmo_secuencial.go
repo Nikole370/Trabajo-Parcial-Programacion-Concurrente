@@ -140,7 +140,8 @@ func main() {
 
 	// Entrenamiento secuencial
 	start := time.Now()
-	weights := trainSequential(X, y, learningRate, iterations)
+	batchSize := 32
+	weights := trainSequential(X, y, learningRate, iterations, batchSize)
 	duration := time.Since(start)
 
 	// Cálculo de precisión
